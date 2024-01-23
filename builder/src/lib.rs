@@ -17,20 +17,17 @@ type TokenStreamResult = syn::Result<TokenStream>;
 fn make_derive_builder(input: DeriveInput) -> TokenStreamResult {
     let DeriveInput { ident, data, .. } = input;
 
-    let fields = if let Data::Struct(DataStruct {
-        fields: Fields::Named(fields),
-        ..
-    }) = data
-    {
-        fields.named
-        // .into_iter()
-        // .map(|field| (field.ident.unwrap(), field.ty))
-        // .collect()
-    } else {
-        return Err(syn::Error::new_spanned(
-            &ident,
-            "only named struct is supported",
-        ));
+    let fields = match data {
+        Data::Struct(DataStruct {
+            fields: Fields::Named(fields),
+            ..
+        }) => fields.named,
+        _ => {
+            return Err(syn::Error::new_spanned(
+                &ident,
+                "only named struct is supported",
+            ));
+        }
     };
 
     let builder_struct_ident = format_ident!("{ident}Builder");
@@ -38,6 +35,8 @@ fn make_derive_builder(input: DeriveInput) -> TokenStreamResult {
     let mut builder_field_declarations = TokenStream::new();
     let mut builder_field_inits = TokenStream::new();
     let mut builder_setters = TokenStream::new();
+    let mut builder_build_checks = TokenStream::new();
+    let mut builder_build_fields = TokenStream::new();
     for field in fields {
         let field_ident = &field.ident.unwrap();
         let field_type = &field.ty;
@@ -48,6 +47,14 @@ fn make_derive_builder(input: DeriveInput) -> TokenStreamResult {
                 self.#field_ident = Some(#field_ident);
                 self
             }
+        });
+        builder_build_checks.extend(quote! {
+            if self.#field_ident.is_none() {
+                return std::result::Result::Err(concat!("field ", stringify!(#field_ident), " not set").to_owned().into());
+            }
+        });
+        builder_build_fields.extend(quote! {
+            #field_ident: self.#field_ident.take().unwrap(),
         });
     }
 
@@ -64,6 +71,12 @@ fn make_derive_builder(input: DeriveInput) -> TokenStreamResult {
         }
         impl #builder_struct_ident {
             #builder_setters
+            pub fn build(&mut self) -> std::result::Result<#ident, Box<dyn std::error::Error>> {
+                #builder_build_checks
+                std::result::Result::Ok(#ident {
+                    #builder_build_fields
+                })
+            }
         }
     })
 }
